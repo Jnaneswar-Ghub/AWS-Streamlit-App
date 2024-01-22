@@ -1,0 +1,148 @@
+###### DO this below step initially ########
+import os, sys, distutils
+import numpy as np
+import subprocess
+
+import streamlit as st
+from PIL import Image
+from transformers import pipeline
+import io
+import base64
+
+
+def classify_image(uploaded_file):
+    model_name = "openai/clip-vit-large-patch14-336"
+    classifier = pipeline("zero-shot-image-classification", model=model_name)
+    labels_for_classification = ["AI generated damaged car image", "Real damaged car image"]
+
+    # Read the uploaded image file as a PIL image
+    image = Image.open(uploaded_file)
+
+    # Convert the image to base64 string
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    image_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    # Perform classification
+    scores = classifier(image_base64, candidate_labels=labels_for_classification)
+    return scores[0]['label'], scores[0]['score']
+
+def text_classify(uploaded_file):
+    from transformers import AutoProcessor, AutoModelForCausalLM
+    from PIL import Image
+
+    image = Image.open(uploaded_file)
+
+    processor_microsoft = AutoProcessor.from_pretrained("microsoft/git-base-coco")
+    model_microsoft = AutoModelForCausalLM.from_pretrained("microsoft/git-base-coco")
+
+    pixel_values_microsoft = processor_microsoft(images=image, return_tensors="pt").pixel_values
+    generated_ids_microsoft = model_microsoft.generate(pixel_values=pixel_values_microsoft, max_length=50)
+    generated_caption_microsoft = processor_microsoft.batch_decode(generated_ids_microsoft, skip_special_tokens=True)[0]
+
+    combined_description = generated_caption_microsoft
+    return combined_description
+
+
+import nltk
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+
+
+def preprocess_text(text):
+    # Tokenize the text
+    tokens = word_tokenize(text.lower())
+
+    # Remove stopwords and non-alphabetic tokens, and lemmatize
+    stop_words = set(stopwords.words('english'))
+    lemmatizer = WordNetLemmatizer()
+
+    tokens = [lemmatizer.lemmatize(token) for token in tokens if token.isalpha() and token not in stop_words]
+
+    return tokens
+
+def has_synonym(word1, word2):
+    # Check if two words have a common synonym using WordNet
+    synonyms_word1 = set()
+    synonyms_word2 = set()
+
+    for syn in nltk.corpus.wordnet.synsets(word1):
+        for lemma in syn.lemmas():
+            synonyms_word1.add(lemma.name())
+
+    for syn in nltk.corpus.wordnet.synsets(word2):
+        for lemma in syn.lemmas():
+            synonyms_word2.add(lemma.name())
+
+    return bool(synonyms_word1.intersection(synonyms_word2))
+
+def compare_texts(claim_reason_text, damaged_parts_text):
+    # Preprocess texts
+    preprocessed_claim_reason = preprocess_text(claim_reason_text)
+    preprocessed_damaged_parts = preprocess_text(damaged_parts_text)
+
+    # Calculate Jaccard similarity coefficient considering synonyms
+    count_similar_words = sum(has_synonym(word1, word2) for word1 in preprocessed_claim_reason for word2 in preprocessed_damaged_parts)
+
+    jaccard_similarity = count_similar_words / (len(preprocessed_claim_reason) + len(preprocessed_damaged_parts) - count_similar_words)
+
+    return jaccard_similarity
+
+def main():
+    st.markdown("<h1 style='text-align: center;position: font-size: 40px; color: grey'>Claim Legitimacy Predictor</h1>", unsafe_allow_html=True)
+    st.sidebar.write("#### Upload image")
+    uploaded_file = st.sidebar.file_uploader("Choose an image...", type=['jpg', 'png'])
+    st.sidebar.write("#### Claim description")
+    claim_description = st.sidebar.text_input('Enter description here 👇', key='claim_description')
+
+    # Display the uploaded image and description
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        st.write("##### Uploaded image")
+        st.image(image, width=250)
+        st.write(
+            '<style>div[data-testid="stImage"] img {display: block; margin-left: auto; margin-right: auto; max-height: 250px;}</style>',
+            unsafe_allow_html=True)
+        st.write("")
+
+
+        # Display buttons only when both image and description are provided
+        if uploaded_file is not None and claim_description.strip():
+            st.write("##### Analysis on Uploaded image")
+            st.write("")
+            st.sidebar.write("#### Click any button to perform analysis")
+
+            if st.sidebar.button('Classify', key='classify'):
+                # Perform image classification using CLIP model
+                prediction_label, prediction_score = classify_image(uploaded_file)
+                st.write("###### Classification - AI-generated or Real damaged car image: ")
+                st.write(f"{prediction_label} with prediction score {prediction_score:.3f}")
+
+            # if st.sidebar.button('Detection', key='detection'):
+            #     # Perform damage detection and store the label using st.session_state
+            #     image = Image.open(uploaded_file)
+            #     img1, img2, img3, parts = inference(image)
+            #     st.write(f"The damaged parts are: {parts}")
+
+            #     # Display images in a single row with three columns
+            #     col1, col2, col3 = st.columns(3)
+
+            #     width = 200
+            #     col1.image(img1, caption='Detecting damaged parts',width=width)
+            #     col2.image(img2, caption='Detecting scratches',width=width)
+            #     col3.image(img3, caption='Detecting the car parts',width=width)
+
+            if st.sidebar.button('Similarity Score', key='similarity_score'):
+                st.write("###### Similarity score: ")
+                combined_description = text_classify(uploaded_file)
+                similarity_score = compare_texts(claim_description, combined_description)
+                st.write(f"The insurance claim and the model description is giving a similarity score of {similarity_score:.3f}")
+
+if __name__ == '__main__':
+    main()
+
