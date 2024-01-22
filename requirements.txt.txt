@@ -1,0 +1,8 @@
+numpy
+distutils
+git
+torch
+nltk
+transformers
+streamlit
+roboflow
